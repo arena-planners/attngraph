@@ -1,0 +1,13 @@
+files:
+  - repo: arena-rosnav/attngraph
+    filename: attngraph_policy_rand.pt
+    dest: model/attngraph_policy.pt
+    sha256: a60bdd3b8ca84457497365133b9055c80d55b11c5a3bc76b28e38d4200cfd8ce
+  - repo: arena-rosnav/attngraph
+    filename: attngraph_gst_rand.pt
+    dest: model/attngraph_gst.pt
+    sha256: 0f176bd724fdd3b16faeff02efdba43321e3a00719b277f05683711ad42657f2
+  - repo: arena-rosnav/attngraph
+    filename: attngraph_gst_args_rand.pickle
+    dest: model/attngraph_gst_args.pickle
+    sha256: bd979d84b241dbb4db1f3e0b8457940ea7cd92fc1369e1f42ccabc22bb35ff1e

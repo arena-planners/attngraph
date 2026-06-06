@@ -1,0 +1,20 @@
+[project]
+name = "arena_planners_attngraph"
+version = "0.0.0"
+description = "Intention-Aware AttnGraph (selfAttn_merge_SRNN + GST) wrapper for arena_planners bridge."
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "arena_planners",
+    "torch>=1.12,<2.1",
+    "numpy>=1.20,<2",
+    "gym==0.15.7",
+    "scipy>=1.7",
+    "pyyaml",
+]
+
+[tool.uv.sources]
+arena_planners = { git = "https://github.com/arena-planners/arena_planners.git", branch = "jazzy", subdirectory = "arena_planners" }
+
+[tool.setuptools]
+packages = []
+py-modules = []
