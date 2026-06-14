@@ -33,6 +33,7 @@ _GST_ARGS = _MODEL_DIR / "attngraph_gst_args.pickle"
 _V_PREF: float = 1.0
 _RADIUS: float = 0.3
 _LOOKAHEAD: float = 2.0
+_GOAL_MAX_DIST: float = 8.0
 _MAX_HUMAN_NUM: int = 20
 _PREDICT_STEPS: int = 5
 _OBS_SEQ_LEN: int = 5
@@ -189,7 +190,9 @@ def step(features: dict) -> list[float]:
     gx, gy = target
 
     # Slot incoming pedestrians into stable rows so the rolling history is per-id.
-    peds = features.get("pedestrians") or []
+    peds = features.get("pedestrians")
+    if peds is None:
+        peds = []
     cur_pos = np.full((_MAX_HUMAN_NUM, 2), _INVALID_POS, dtype=np.float32)
     cur_mask = np.zeros(_MAX_HUMAN_NUM, dtype=bool)
     seen_slots: set[int] = set()
@@ -215,8 +218,13 @@ def step(features: dict) -> list[float]:
 
     pred_pos, pred_valid = _run_gst(traj_hist, mask_hist)
 
-    # robot_node (world frame): [px, py, radius, gx, gy, v_pref, theta]
-    robot_node = np.array([[px, py, _RADIUS, gx, gy, _V_PREF, theta]], dtype=np.float32)
+    # The SRNN net consumes absolute coords with no internal rotate and trained with px, py, gx, gy
+    # in a ~+/-8.5 m box, so recentre on the robot and clamp the goal offset to stay in-distribution.
+    gdx, gdy = gx - px, gy - py
+    gdist = float(np.hypot(gdx, gdy))
+    if gdist > _GOAL_MAX_DIST:
+        gdx, gdy = gdx * _GOAL_MAX_DIST / gdist, gdy * _GOAL_MAX_DIST / gdist
+    robot_node = np.array([[0.0, 0.0, _RADIUS, gdx, gdy, _V_PREF, theta]], dtype=np.float32)
     temporal_edges = np.array([[vx, vy]], dtype=np.float32)
 
     # spatial_edges layout per human: [rel_curr_x, rel_curr_y, rel_step1_x, rel_step1_y, ...,
@@ -265,6 +273,7 @@ def step(features: dict) -> list[float]:
     speed = float(np.linalg.norm(raw))
     if speed > _V_PREF:
         raw = raw / speed * _V_PREF
+
     return [float(raw[0]), float(raw[1])]
 
 
