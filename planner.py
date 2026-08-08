@@ -18,7 +18,6 @@ import sys
 
 import numpy as np
 import torch
-from arena_planners.geometry import lookahead_on_path
 from arena_planners.sdk import load_manifest, main_loop
 
 # Vendored upstream code lives flat under this directory; expose it on sys.path so the
@@ -32,7 +31,6 @@ _GST_ARGS = _MODEL_DIR / "attngraph_gst_args.pickle"
 
 _V_PREF: float = 1.0
 _RADIUS: float = 0.3
-_LOOKAHEAD: float = 2.0
 _GOAL_MAX_DIST: float = 8.0
 _MAX_HUMAN_NUM: int = 20
 _PREDICT_STEPS: int = 5
@@ -178,12 +176,9 @@ def step(features: dict) -> list[float]:
     px, py, theta = float(robot_pose[0]), float(robot_pose[1]), float(robot_pose[2])
     vx, vy = float(robot_state[2]), float(robot_state[3])
 
-    global_plan = features.get("global_plan")
     goal_pose = features.get("goal_pose")
     target: tuple[float, float] | None = None
-    if global_plan is not None and len(global_plan) > 0:
-        target = lookahead_on_path(global_plan, robot_pose, lookahead=_LOOKAHEAD)
-    if target is None and goal_pose is not None:
+    if goal_pose is not None:
         target = (float(goal_pose[0]), float(goal_pose[1]))
     if target is None:
         return [0.0, 0.0]
