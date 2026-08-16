@@ -15,7 +15,7 @@ Two stacked components:
 ## Run
 
 ```sh
-arena launch mobile:=drl mobile.planner:=attngraph
+arena launch robot.mobile:=drl robot.mobile.planner:=attngraph
 ```
 
 Requires a global plan. Defaults to `nav2/navfn`.
