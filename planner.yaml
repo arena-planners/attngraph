@@ -1,6 +1,7 @@
 action_type: omnidirectional
 sensor_needs: []
 obs_policy: latest_only
+rate_hz: 4
 controls_orientation: false
 
 depends:
@@ -44,4 +45,4 @@ observations:
     subgoal_from_plan:
       type: SubgoalGenerator
       params:
-        lookahead: 2.0
+        lookahead: 3.0

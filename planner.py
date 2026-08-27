@@ -36,6 +36,8 @@ _MAX_HUMAN_NUM: int = 20
 _PREDICT_STEPS: int = 5
 _OBS_SEQ_LEN: int = 5
 _INVALID_POS: float = -999.0
+_ABSENT_CROWD_DIST: float = 5.0  # config.robot.sensor_range
+_ABSENT_CROWD_REANCHOR: float = 10.0
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 _actor_critic: torch.nn.Module | None = None
@@ -44,6 +46,7 @@ _rnn_hxs: dict[str, torch.Tensor] | None = None
 _traj_buffer: list[np.ndarray] | None = None  # 5x (max_human_num, 2) absolute positions
 _mask_buffer: list[np.ndarray] | None = None  # 5x (max_human_num,) visible bools
 _ped_id_slot: dict[int, int] | None = None    # ped id -> row in the buffer
+_absent_anchor: tuple[float, float] | None = None  # world-stationary stand-in while the crowd is empty
 
 
 def _build_args() -> argparse.Namespace:
@@ -174,7 +177,10 @@ def step(features: dict) -> list[float]:
     if robot_pose is None or robot_state is None:
         return [0.0, 0.0]
     px, py, theta = float(robot_pose[0]), float(robot_pose[1]), float(robot_pose[2])
-    vx, vy = float(robot_state[2]), float(robot_state[3])
+    # temporal_edges is the world-frame robot velocity (crowd_sim robot.vx/vy), odom twist is body-frame.
+    bvx, bvy = float(robot_state[2]), float(robot_state[3])
+    vx = bvx * np.cos(theta) - bvy * np.sin(theta)
+    vy = bvx * np.sin(theta) + bvy * np.cos(theta)
 
     goal_pose = features.get("goal_pose")
     target: tuple[float, float] | None = None
@@ -183,6 +189,13 @@ def step(features: dict) -> list[float]:
     if target is None:
         return [0.0, 0.0]
     gx, gy = target
+
+    # The SRNN net consumes absolute coords with no internal rotate and trained with px, py, gx, gy
+    # in a ~+/-8.5 m box, so recentre on the robot and clamp the goal offset to stay in-distribution.
+    gdx, gdy = gx - px, gy - py
+    gdist = float(np.hypot(gdx, gdy))
+    if gdist > _GOAL_MAX_DIST:
+        gdx, gdy = gdx * _GOAL_MAX_DIST / gdist, gdy * _GOAL_MAX_DIST / gdist
 
     # Slot incoming pedestrians into stable rows so the rolling history is per-id.
     peds = features.get("pedestrians")
@@ -203,6 +216,18 @@ def step(features: dict) -> list[float]:
     for pid, slot in list(_ped_id_slot.items()):
         if slot not in seen_slots:
             del _ped_id_slot[pid]
+    global _absent_anchor
+    if seen_slots:
+        _absent_anchor = None
+    else:
+        # Trained with 20 humans always present: an all-padding crowd makes the action goal-blind, and a
+        # bystander behind the robot makes it stall short of the goal. Stand one world-stationary human
+        # at sensor range beside the robot, matching how crowdnav pads its empty crowd.
+        if _absent_anchor is None or np.hypot(_absent_anchor[0] - px, _absent_anchor[1] - py) > _ABSENT_CROWD_REANCHOR:
+            ux, uy = (gdx / gdist, gdy / gdist) if gdist > 1e-6 else (0.0, 1.0)
+            _absent_anchor = (px - _ABSENT_CROWD_DIST * uy, py + _ABSENT_CROWD_DIST * ux)
+        cur_pos[0] = _absent_anchor
+        cur_mask[0] = True
 
     _traj_buffer.append(cur_pos)
     _mask_buffer.append(cur_mask)
@@ -213,13 +238,8 @@ def step(features: dict) -> list[float]:
 
     pred_pos, pred_valid = _run_gst(traj_hist, mask_hist)
 
-    # The SRNN net consumes absolute coords with no internal rotate and trained with px, py, gx, gy
-    # in a ~+/-8.5 m box, so recentre on the robot and clamp the goal offset to stay in-distribution.
-    gdx, gdy = gx - px, gy - py
-    gdist = float(np.hypot(gdx, gdy))
-    if gdist > _GOAL_MAX_DIST:
-        gdx, gdy = gdx * _GOAL_MAX_DIST / gdist, gdy * _GOAL_MAX_DIST / gdist
-    robot_node = np.array([[0.0, 0.0, _RADIUS, gdx, gdy, _V_PREF, theta]], dtype=np.float32)
+    # crowd_sim never updates a holonomic robot's theta after reset, so the checkpoint only ever saw pi/2.
+    robot_node = np.array([[0.0, 0.0, _RADIUS, gdx, gdy, _V_PREF, np.pi / 2.0]], dtype=np.float32)
     temporal_edges = np.array([[vx, vy]], dtype=np.float32)
 
     # spatial_edges layout per human: [rel_curr_x, rel_curr_y, rel_step1_x, rel_step1_y, ...,
@@ -241,14 +261,10 @@ def step(features: dict) -> list[float]:
                 spatial[i, 3 + 2 * k] = spatial[i, 1]
         visible[i] = True
 
-    # Sort by distance to robot (matches VecPretextNormalize.process_obs_rew tail logic).
+    # VecPretextNormalize.process_obs_rew sorts spatial_edges by distance but leaves visible_masks in id order.
     dists = np.linalg.norm(spatial[:, :2], axis=1)
-    order = np.argsort(dists)
-    spatial = spatial[order]
-    visible = visible[order]
-    # MultiheadAttention NaNs out when every key is padded; upstream sort_humans=False has a
-    # dummy_human_mask guard, sort_humans=True does not. Clamp to >=1 so row 0 (the closest
-    # far-placeholder ped at 15 m) participates in attention as a no-op visible slot.
+    spatial = spatial[np.argsort(dists)]
+    # MultiheadAttention NaNs out when every key is padded (upstream clamps the same way).
     detected_n = max(int(visible.sum()), 1)
 
     obs = {
@@ -273,11 +289,12 @@ def step(features: dict) -> list[float]:
 
 
 def on_reset(episode_id: str, initial_state: dict | None) -> None:
-    global _rnn_hxs, _traj_buffer, _mask_buffer, _ped_id_slot
+    global _rnn_hxs, _traj_buffer, _mask_buffer, _ped_id_slot, _absent_anchor
     _rnn_hxs = None
     _traj_buffer = None
     _mask_buffer = None
     _ped_id_slot = None
+    _absent_anchor = None
 
 
 if __name__ == "__main__":
