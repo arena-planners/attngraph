@@ -217,17 +217,19 @@ def step(features: dict) -> list[float]:
         if slot not in seen_slots:
             del _ped_id_slot[pid]
     global _absent_anchor
-    if seen_slots:
+    near_slots = [slot for slot in seen_slots if np.hypot(cur_pos[slot, 0] - px, cur_pos[slot, 1] - py) <= _ABSENT_CROWD_DIST]
+    if near_slots:
         _absent_anchor = None
     else:
-        # Trained with 20 humans always present: an all-padding crowd makes the action goal-blind, and a
+        # Trained with 20 humans always present: a crowd with nobody in sensor range makes the action goal-blind, and a
         # bystander behind the robot makes it stall short of the goal. Stand one world-stationary human
         # at sensor range beside the robot, matching how crowdnav pads its empty crowd.
         if _absent_anchor is None or np.hypot(_absent_anchor[0] - px, _absent_anchor[1] - py) > _ABSENT_CROWD_REANCHOR:
             ux, uy = (gdx / gdist, gdy / gdist) if gdist > 1e-6 else (0.0, 1.0)
             _absent_anchor = (px - _ABSENT_CROWD_DIST * uy, py + _ABSENT_CROWD_DIST * ux)
-        cur_pos[0] = _absent_anchor
-        cur_mask[0] = True
+        free = next(i for i in range(_MAX_HUMAN_NUM) if not cur_mask[i])
+        cur_pos[free] = _absent_anchor
+        cur_mask[free] = True
 
     _traj_buffer.append(cur_pos)
     _mask_buffer.append(cur_mask)
