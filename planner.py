@@ -201,6 +201,7 @@ def step(features: dict) -> list[float]:
     peds = features.get("pedestrians")
     if peds is None:
         peds = []
+    peds = sorted(peds, key=lambda ped: np.hypot(float(ped[1]) - px, float(ped[2]) - py))
     cur_pos = np.full((_MAX_HUMAN_NUM, 2), _INVALID_POS, dtype=np.float32)
     cur_mask = np.zeros(_MAX_HUMAN_NUM, dtype=bool)
     seen_slots: set[int] = set()
@@ -227,7 +228,9 @@ def step(features: dict) -> list[float]:
         if _absent_anchor is None or np.hypot(_absent_anchor[0] - px, _absent_anchor[1] - py) > _ABSENT_CROWD_REANCHOR:
             ux, uy = (gdx / gdist, gdy / gdist) if gdist > 1e-6 else (0.0, 1.0)
             _absent_anchor = (px - _ABSENT_CROWD_DIST * uy, py + _ABSENT_CROWD_DIST * ux)
-        free = next(i for i in range(_MAX_HUMAN_NUM) if not cur_mask[i])
+        free = next((i for i in range(_MAX_HUMAN_NUM) if not cur_mask[i]), None)
+        if free is None:
+            free = max(seen_slots, key=lambda s: np.hypot(cur_pos[s, 0] - px, cur_pos[s, 1] - py))
         cur_pos[free] = _absent_anchor
         cur_mask[free] = True
 
